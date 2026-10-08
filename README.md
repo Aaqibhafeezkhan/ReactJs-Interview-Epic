@@ -877,6 +877,117 @@ Load JavaScript for a route when it is needed rather than shipping the entire ap
 
 ---
 
+# Phase 5 — Forms, Routing and Resilient UX Deep Dive
+
+This phase focuses on the frontend failure modes that matter in production: user input, navigation, asynchronous requests, partial failure, cancellation, stale data, and accessible recovery paths.
+
+## Forms
+
+### How do you design a production form?
+
+Treat the form as a state machine: initial, editing, submitting, success, and failure states. Define field ownership, validation boundaries, submission semantics, accessibility, and server error mapping before adding UI polish.
+
+### Client validation vs server validation?
+
+Client validation improves feedback and reduces avoidable requests. Server validation is authoritative because clients are untrusted and may be bypassed. A robust form can share validation rules conceptually without assuming client validation is a security boundary.
+
+### How do you handle async validation?
+
+Debounce where appropriate, cancel or ignore stale requests, associate responses with the value/version that initiated them, and avoid allowing an older response to overwrite newer user input.
+
+### How do you prevent duplicate submissions?
+
+Represent submission state explicitly, disable or gate the relevant action when appropriate, and use server-side idempotency keys for mutations where duplicate execution would be harmful. A disabled button alone is not a correctness mechanism.
+
+### How should server errors map to a form?
+
+Keep field-level errors separate from form-level errors. Map stable server error codes to the relevant fields where possible and preserve a general error path for failures that cannot be attributed to one field.
+
+### What makes a form accessible?
+
+Use real labels, semantic controls, keyboard support, clear error associations, meaningful focus behavior, appropriate autocomplete attributes, and status announcements where needed. Error text should be understandable without relying only on color.
+
+## Routing
+
+### What should a route own?
+
+A route should define navigation identity and, where the router supports it, the data/loading/error boundary associated with that navigation. Keep reusable UI components independent of router-specific details when practical.
+
+### How do nested routes help?
+
+They let layouts and parent UI persist while child content changes. This can improve information architecture and avoid rebuilding shared navigation or shell state on every navigation.
+
+### How should protected routes work?
+
+The server must enforce authentication and authorization. Client-side guards are for navigation UX: redirecting unauthenticated users, showing loading state while identity is known, and avoiding flashes of unauthorized UI.
+
+### What is route-level code splitting?
+
+Load the code needed for a route when the route is reached instead of shipping every screen up front. The trade-off is a navigation-time loading boundary, so important routes may benefit from prefetching or framework-level optimization.
+
+### How do you handle a navigation that fails?
+
+Provide a route-level error state with a retry/reload path, preserve enough navigation context for the user to recover, and distinguish application errors from an unavailable backend or failed network request.
+
+## Resilient asynchronous UX
+
+### What states should an API-driven component model?
+
+At minimum: idle/loading, success, empty, failure, and often refreshing or stale-but-visible. Treating everything as loading or error usually produces poor UX and makes recovery ambiguous.
+
+### How do you prevent stale responses from overwriting current state?
+
+Cancel obsolete requests when the API supports cancellation, or track a request ID/version and ignore responses that no longer correspond to the current state. This is especially important for search, filters, and rapidly changing routes.
+
+### Retry or not retry?
+
+Retry transient failures when the operation is safe and the user benefits from recovery. Avoid blindly retrying validation/authentication failures or creating repeated mutations without idempotency. Give the user control when repeated automatic retries would be surprising.
+
+### What is graceful degradation in a frontend?
+
+Keep the most important user journey usable when a non-critical dependency fails. For example, render cached data while a secondary panel fails, rather than turning the entire page into an error screen.
+
+### How should optimistic UI work?
+
+Apply the expected state immediately, record enough information to reconcile or roll back, submit the mutation, and handle conflict/failure explicitly. Optimistic UI is appropriate only when the expected action is reasonably predictable and rollback is understandable.
+
+### What is the difference between loading, empty, and error states?
+
+Loading means the result is not available yet. Empty means the request succeeded but there is nothing to show. Error means the result could not be obtained or processed. These states need different copy and recovery actions.
+
+### How do you handle offline or intermittent connectivity?
+
+Detect connectivity as a hint rather than absolute truth, preserve user input where safe, avoid losing pending work, retry appropriate operations, and communicate whether data is cached, stale, pending, or failed. Critical mutations need explicit synchronization semantics.
+
+## Production debugging scenarios
+
+### A user double-clicks Submit and creates two orders. What do you do?
+
+The frontend should prevent accidental duplicate interaction, but the backend should enforce idempotency for the order operation. Investigate request IDs, server logs, retry behavior, network timing, and whether the client generated or reused an operation key.
+
+### Search results randomly show an older query. Why?
+
+Requests can resolve out of order. Reproduce with artificial latency, inspect request sequencing, then cancel stale requests or gate state updates by the latest query/request ID.
+
+### Users see a blank screen after navigation. What is your workflow?
+
+Check route transitions and chunk loading, browser console errors, route-level exceptions, failed data requests, deployment asset/version mismatches, and error boundaries. A route-level fallback should provide a recovery path rather than leaving an unhandled failure.
+
+### A form loses all entered data after a network error. Is that acceptable?
+
+Usually not. Preserve user input when the data is safe to retain, show the failure close to the action that failed, and allow retry without forcing the user to re-enter everything.
+
+### Senior interviewer follow-ups
+
+- Where should retries live: UI, data-fetching layer, or backend?
+- How do you cancel a request with AbortController?
+- How do you test stale-response races deterministically?
+- When is optimistic UI unsafe?
+- How would you design navigation during an authentication refresh?
+- What should happen if a route's JavaScript chunk is unavailable after deployment?
+- How do accessibility requirements change your error/loading design?
+
+---
 # TypeScript + React
 
 ### 170. How do you type component props?
