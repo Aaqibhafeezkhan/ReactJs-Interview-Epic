@@ -988,6 +988,147 @@ Usually not. Preserve user input when the data is safe to retain, show the failu
 - How do accessibility requirements change your error/loading design?
 
 ---
+# Phase 6 — TypeScript and Testing Deep Dive
+
+This phase connects type design with test design. Types make invalid states harder to represent at compile time; tests verify runtime behavior, browser interactions, network boundaries, and integration assumptions that TypeScript cannot prove.
+
+## React + TypeScript
+
+### How should component props be designed?
+
+Start with the smallest public contract that describes what the component needs. Prefer explicit object types, reuse domain types when they are genuinely shared, and avoid exporting implementation details as part of the component API. A component that accepts every possible option is harder to understand and harder to test.
+
+```tsx
+type SaveButtonProps = {
+  saving: boolean;
+  onSave: () => void;
+  label?: string;
+};
+
+function SaveButton({ saving, onSave, label = "Save" }: SaveButtonProps) {
+  return (
+    <button type="button" disabled={saving} onClick={onSave}>
+      {saving ? "Saving…" : label}
+    </button>
+  );
+}
+```
+
+### How do you type children?
+
+Use `React.ReactNode` when a component accepts renderable content, `React.ReactElement` when it specifically requires one React element, and a more constrained type when the component contract truly needs one known child shape. Do not add `children` to every props type by habit.
+
+### How do you type DOM events?
+
+Infer event types from JSX handlers where possible. When declaring a handler separately, use the event type associated with the element and event, such as `React.ChangeEvent<HTMLInputElement>` for an input change or `React.FormEvent<HTMLFormElement>` for form submission. Avoid broad casts that hide a mismatch between the element and the handler.
+
+### When are discriminated unions useful?
+
+Use a literal discriminator to represent mutually exclusive UI states. This prevents impossible combinations such as a successful result with an error message and gives exhaustive switches a useful compile-time check.
+
+```ts
+type LoadState<T> =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "success"; data: T }
+  | { status: "error"; message: string };
+
+function assertNever(value: never): never {
+  throw new Error(`Unexpected state: ${String(value)}`);
+}
+
+function describeState<T>(state: LoadState<T>): string {
+  switch (state.status) {
+    case "idle": return "Not started";
+    case "loading": return "Loading";
+    case "success": return "Loaded";
+    case "error": return state.message;
+    default: return assertNever(state);
+  }
+}
+```
+
+### `any` vs `unknown`?
+
+`any` disables checking and allows unsafe operations to spread. `unknown` requires narrowing before use, making it a safer boundary for untrusted input, caught exceptions, and decoded JSON. A type assertion changes what the compiler believes; it does not validate data at runtime.
+
+### How should API responses be typed?
+
+Treat static types as expectations, not runtime validation. Parse untrusted payloads at the network boundary with a runtime schema or explicit checks, then expose a trusted domain type to the rest of the application. Keep transport DTOs distinct from UI state when their shapes or lifecycles differ.
+
+### How do you type generic components and hooks?
+
+Introduce a generic only when a real relationship must be preserved, such as an item type shared between a list's data and its render callback. Keep inference working for callers; avoid generic parameters that can be removed without losing information. For polymorphic components, document the complexity and accessibility trade-offs before adopting an `as` API.
+
+### How do you type refs?
+
+Use the ref type matching the value being held, and distinguish DOM refs from mutable values that do not participate in rendering. Prefer declarative state for information that affects the UI. A ref is not a substitute for state merely because it avoids a render.
+
+## Testing strategy
+
+### What belongs in a component test?
+
+Test observable behavior through roles, labels, visible text, and user actions. Assert the public contract rather than internal state, private helper calls, or the exact component tree. Implementation-focused tests often fail during harmless refactors while missing user-visible defects.
+
+### What is the right boundary for a hook test?
+
+Test a hook directly when its behavior is independently meaningful and awkward to exercise through a component. Otherwise, prefer testing the component that uses it so the test captures the real user-visible contract. Avoid testing every internal hook just because it exists.
+
+### How should async UI be tested?
+
+Control the network boundary and assert the loading, success, empty, and failure states. Await observable outcomes rather than arbitrary sleeps. For race conditions, make response ordering deterministic and verify that an older response cannot overwrite the newest query or selection.
+
+### Why mock at the network boundary?
+
+A network-level mock preserves the application's request construction, response parsing, loading transitions, and error mapping while avoiding dependence on a live service. Mocking a low-level helper can bypass the very integration behavior the test should exercise. Keep a smaller set of tests against real dependencies where compatibility matters.
+
+### Unit, integration, contract, and end-to-end tests?
+
+- **Unit:** fast feedback on a focused function or component behavior.
+- **Integration:** verifies important boundaries working together, such as a form plus its data layer.
+- **Contract:** verifies assumptions about request/response shape between independently developed systems.
+- **End-to-end:** exercises a high-value journey through the running application and catches wiring or deployment problems.
+
+The goal is not to maximize one category. Choose the cheapest test that provides meaningful confidence, then cover critical cross-boundary risks at the appropriate level.
+
+### What causes flaky tests?
+
+Common causes include uncontrolled time, shared mutable state, test-order dependencies, real network calls, animations, leaked subscriptions, and assertions made before asynchronous work finishes. Fix the source of nondeterminism instead of adding retries that conceal it.
+
+### Are fake timers always appropriate?
+
+No. Fake timers are useful for debounce, polling, and timeout behavior, but they can interact poorly with promise queues and libraries that schedule work internally. Advance timers deliberately and await resulting asynchronous work. Use real timers when the behavior under test depends on browser scheduling that the fake clock does not faithfully model.
+
+### What does coverage tell you?
+
+Coverage indicates which code executed, not whether the test would detect a meaningful defect. Pair coverage with risk-based scenarios, mutation-minded review, and assertions about externally visible behavior. A high percentage can coexist with weak tests.
+
+## Production debugging scenarios
+
+### A TypeScript build passes but production crashes on an API response
+
+The compiler cannot guarantee that remote JSON matches an interface. Capture a sanitized failing payload, validate at the boundary, add a regression test for the unexpected shape, and make the UI handle invalid or partial data deliberately.
+
+### A test passes alone but fails in the full suite
+
+Look for leaked timers/listeners, shared mocks, non-reset module state, reused database rows, and tests that depend on execution order. Run the failing subset repeatedly and isolate shared resources before weakening assertions.
+
+### A test suite is slow after adding many Spring-like integration boundaries to frontend tests
+
+Keep pure logic tests small, use component tests for interaction contracts, reserve browser-level tests for critical journeys, and avoid booting a full application stack when a narrow boundary is enough. Do not remove valuable integration coverage merely to improve a dashboard number.
+
+### Senior interviewer follow-ups
+
+- When would you model a UI with a discriminated union instead of several booleans?
+- Why does an interface not validate a JSON response?
+- What is the practical difference between `unknown` and a type assertion?
+- Which behavior should be tested through the user rather than a helper?
+- How would you test an out-of-order response race without sleeps?
+- When does a mock make a test less trustworthy?
+- How would you choose the smallest test suite that still protects a critical checkout flow?
+
+---
+
 # TypeScript + React
 
 ### 170. How do you type component props?
